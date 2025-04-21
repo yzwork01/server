@@ -1398,12 +1398,12 @@ RUN yum install -y numactl-devel
 
 RUN yum install -y epel-release
 
-RUN curl -O https://www.python.org/ftp/python/3.11.8/Python-3.11.8.tgz && \
-    tar -xzf Python-3.11.8.tgz && \
-    cd Python-3.11.8 && \
-    ./configure --enable-optimizations --prefix=/usr/local && \
-    make -j$(nproc) && \
-    make altinstall && \
+RUN curl -O https://www.python.org/ftp/python/3.11.8/Python-3.11.8.tgz && \\
+    tar -xzf Python-3.11.8.tgz && \\
+    cd Python-3.11.8 && \\
+    ./configure --enable-optimizations --enable-shared --prefix=/usr/local && \\
+    make -j$(nproc) && \\
+    make altinstall && \\
     cd .. && rm -rf Python-3.11.8 Python-3.11.8.tgz
 
 RUN yum -y update
