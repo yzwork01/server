@@ -920,7 +920,7 @@ ARG BASE_IMAGE={}
     )
 
     df += """
-FROM ${BASE_IMAGE}
+FROM --platform=linux/amd64 ${BASE_IMAGE}
 
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
@@ -932,44 +932,99 @@ RUN yum install -y ca-certificates curl gnupg yum-utils \\
       && yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 #   && yum install -y docker.io docker-buildx-plugin
 
+RUN yum groupinstall -y "Development Tools" && \\
+    yum install -y gcc gcc-c++ make wget zlib-devel bzip2 bzip2-devel \\
+    readline-devel sqlite sqlite-devel openssl-devel xz xz-devel libffi-devel
+
+RUN yum install -y epel-release 
+
+Run yum install -y re2 re2-devel
+
+# 构建并安装 Python 3.11
+RUN curl -O https://www.python.org/ftp/python/3.11.8/Python-3.11.8.tgz && \\
+    tar -xzf Python-3.11.8.tgz && \\
+    cd Python-3.11.8 && \\
+    ./configure --enable-optimizations && \\
+    make -j$(nproc) && make altinstall && \\
+    cd .. && rm -rf Python-3.11.8*
+
+# 设置 python3/pip3 链接
+RUN ln -sf /usr/local/bin/python3.11 /usr/bin/python3 && \\
+    ln -sf /usr/local/bin/pip3.11 /usr/bin/pip3
+
+RUN curl -L https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh -o cmake-install.sh \\
+    && chmod +x cmake-install.sh \\
+    && ./cmake-install.sh --skip-license --prefix=/usr/local \\
+    && rm cmake-install.sh
+
 # libcurl4-openSSL-dev is needed for GCS
 # python3-dev is needed by Torchvision
 # python3-pip and libarchive-dev is needed by python backend
 # libxml2-dev is needed for Azure Storage
 # scons is needed for armnn_tflite backend build dep
-RUN yum install -y \\
-            ca-certificates \\
-            autoconf \\
-            automake \\
-            git \\
-            gperf \\
-            re2-devel \\
-            openssl-devel \\
-            libtool \\
-            libcurl-devel \\
-            libb64-devel \\
-            gperftools-devel \\
-            patchelf \\
-            python3.11-devel \\
-            python3-pip \\
-            python3-setuptools \\
-            rapidjson-devel \\
-            python3-scons \\
-            pkg-config \\
-            unzip \\
-            wget \\
-            zlib-devel \\
-            libarchive-devel \\
-            libxml2-devel \\
-            numactl-devel \\
-            wget
+
+RUN yum install -y git
+RUN yum install -y autoconf
+RUN yum install -y automake
+RUN yum install -y libtool
+
+RUN yum install -y dnf-plugins-core && \\
+    dnf config-manager --set-enabled powertools
+RUN yum install -y gperf
+
+
+RUN yum install -y libcurl-devel
+RUN yum install -y openssl-devel
+RUN yum install -y patchelf
+RUN yum install -y zlib-devel
+RUN yum install -y libarchive-devel
+RUN yum install -y libxml2-devel
+RUN yum install -y numactl-devel
+RUN yum install -y gperftools-devel
+RUN yum install -y rapidjson-devel
+
+
+RUN yum install -y numactl-devel
+
+RUN yum install -y libb64-devel
 
 RUN pip3 install --upgrade pip \\
       && pip3 install --upgrade \\
           wheel \\
           setuptools \\
           docker \\
+          scons \\
+          \"numpy<2\" \\
           virtualenv
+
+RUN git clone https://github.com/Tencent/rapidjson.git /tmp/rapidjson && \\
+    mkdir /tmp/rapidjson/build && \\
+    cd /tmp/rapidjson/build && \\
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && \\
+    make install && \\
+    rm -rf /tmp/rapidjson
+
+
+RUN python3.11 -m ensurepip --upgrade \\
+ && python3.11 -m pip install --upgrade pip setuptools wheel
+
+
+RUN pip3 uninstall -y pybind11
+
+RUN pip3 install pybind11
+
+# 安装 gcc-toolset-11
+RUN yum install -y gcc-toolset-11
+
+ENV CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
+ENV CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
+ENV PATH=/opt/rh/gcc-toolset-11/root/usr/bin:$PATH
+ENV LD_LIBRARY_PATH=/opt/rh/gcc-toolset-11/root/usr/lib64:${LD_LIBRARY_PATH:-}
+
+ENV CMAKE_PREFIX_PATH=/usr/include/python3.11
+
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/python3.11.conf && ldconfig
+
 
 # Install boost version >= 1.78 for boost::span
 # Current libboost-dev apt packages are < 1.78, so install from tar.gz
@@ -977,6 +1032,11 @@ RUN wget -O /tmp/boost.tar.gz \\
           https://archives.boost.io/release/1.80.0/source/boost_1_80_0.tar.gz \\
       && (cd /tmp && tar xzf boost.tar.gz) \\
       && mv /tmp/boost_1_80_0/boost /usr/include/boost
+
+RUN mkdir -p /workspace && \\
+    echo "cmake_minimum_required(VERSION 3.27)" > /workspace/CMakeLists.txt
+RUN echo "cmake_policy(SET CMP0148 NEW)" >> /workspace/CMakeLists.txt
+
 
 # Server build requires recent version of CMake (FetchContent required)
 # Might not need this if the installed version of cmake is high enough for our build.
@@ -1195,7 +1255,7 @@ FROM {} AS min_container
 ############################################################################
 ##  Production stage: Create container with just inference server executable
 ############################################################################
-FROM ${BASE_IMAGE}
+FROM --platform=linux/amd64 ${BASE_IMAGE}
 """
 
     df += dockerfile_prepare_container_linux(
@@ -1313,18 +1373,53 @@ RUN userdel tensorrt-server > /dev/null 2>&1 || true \\
     if target_platform() == "rhel":
         df += """
 # Common dpeendencies.
-RUN yum install -y \\
-        git \\
-        gperf \\
-        re2-devel \\
-        openssl-devel \\
-        libtool \\
-        libcurl-devel \\
-        libb64-devel \\
-        gperftools-devel \\
-        patchelf \\
-        wget \\
-        numactl-devel
+
+RUN yum groupinstall -y "Development Tools" && \
+    yum install -y make
+
+RUN yum install -y dnf-plugins-core && \\
+    dnf config-manager --set-enabled powertools
+RUN yum install -y gperf
+
+RUN yum install -y epel-release 
+Run yum install -y re2 re2-devel
+
+
+
+RUN yum install -y git
+RUN yum install -y openssl-devel
+RUN yum install -y libtool
+RUN yum install -y libcurl-devel
+RUN yum install -y libb64-devel
+RUN yum install -y gperftools-devel
+RUN yum install -y patchelf
+RUN yum install -y wget
+RUN yum install -y numactl-devel
+
+RUN yum install -y epel-release
+
+RUN curl -O https://www.python.org/ftp/python/3.11.8/Python-3.11.8.tgz && \
+    tar -xzf Python-3.11.8.tgz && \
+    cd Python-3.11.8 && \
+    ./configure --enable-optimizations --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make altinstall && \
+    cd .. && rm -rf Python-3.11.8 Python-3.11.8.tgz
+
+RUN yum -y update
+RUN yum install -y epel-release
+RUN pip3 install --upgrade pip
+RUN pip3 install Cython
+RUN pip3 install wheel setuptools
+RUN pip3 install "numpy<2" virtualenv
+RUN yum clean all
+
+RUN dnf install -y dnf-plugins-core
+RUN dnf config-manager --set-enabled powertools
+RUN dnf clean all
+RUN dnf makecache
+RUN dnf install -y libarchive-devel
+
 """
     else:
         df += """
@@ -1387,21 +1482,22 @@ RUN ln -sf ${_CUDA_COMPAT_PATH}/lib.real ${_CUDA_COMPAT_PATH}/lib \\
     # Add dependencies needed for python backend
     if "python" in backends:
         df += """
-# python3, python3-pip and some pip installs required for the python backend
-RUN apt-get update \\
-      && apt-get install -y --no-install-recommends \\
-            python3 \\
-            libarchive-dev \\
-            python3-pip \\
-            libpython3-dev \\
-      && pip3 install --upgrade pip \\
-      && pip3 install --upgrade \\
-            wheel \\
-            setuptools \\
-            \"numpy<2\" \\
-            virtualenv \\
-      && rm -rf /var/lib/apt/lists/*
-"""
+#         df += """
+# # python3, python3-pip and some pip installs required for the python backend
+# RUN apt-get update \\
+#       && apt-get install -y --no-install-recommends \\
+#             python3 \\
+#             libarchive-dev \\
+#             python3-pip \\
+#             libpython3-dev \\
+#       && pip3 install --upgrade pip \\
+#       && pip3 install --upgrade \\
+#             wheel \\
+#             setuptools \\
+#             \"numpy<2\" \\
+#             virtualenv \\
+#       && rm -rf /var/lib/apt/lists/*
+# """
     if "tensorrtllm" in backends:
         df += """
 # Updating the openssh-client to fix for the CVE-2024-6387. This can be removed when trtllm uses a later CUDA container(12.5 or later)
