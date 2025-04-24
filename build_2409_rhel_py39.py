@@ -1377,9 +1377,11 @@ RUN userdel tensorrt-server > /dev/null 2>&1 || true \\
     if target_platform() == "rhel":
         df += """
 # Common dpeendencies.
+RUN yum -y update
 
-RUN yum groupinstall -y "Development Tools" && \
-    yum install -y make
+RUN yum groupinstall -y "Development Tools" && \\
+    yum install -y gcc gcc-c++ make wget zlib-devel bzip2 bzip2-devel \\
+    readline-devel sqlite sqlite-devel openssl-devel xz xz-devel libffi-devel
 
 RUN yum install -y dnf-plugins-core && \\
     dnf config-manager --set-enabled powertools
@@ -1387,7 +1389,6 @@ RUN yum install -y gperf
 
 RUN yum install -y epel-release 
 Run yum install -y re2 re2-devel
-
 
 
 RUN yum install -y git
@@ -1422,11 +1423,12 @@ RUN curl -O https://www.python.org/ftp/python/3.9.19/Python-3.9.19.tgz && \\
     cd .. && rm -rf Python-3.9.*
 
 # 设置 python3/pip3 链接
-RUN rm -f /usr/local/bin/python3 \\
 RUN ln -sf /usr/local/bin/python3.9 /usr/bin/python3 && \\
     ln -sf /usr/local/bin/pip3.9 /usr/bin/pip3
 
-RUN yum -y update
+RUN echo "/usr/local/lib" | tee /etc/ld.so.conf.d/python3.9.conf && \\
+    ldconfig
+
 RUN yum install -y epel-release
 RUN pip3 install --upgrade pip
 RUN pip3 install Cython
